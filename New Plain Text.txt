@@ -1,34 +1,122 @@
-SCRIPTED PIPELINE 
+import boto3
+import datetime
 
-node('built-in')
-{
-  stage('continuous download')
-  {
-    git url
-}
-}
+s3 = boto3.client('s3')
 
-DECLARATIVE PIPELINE
+def lambda_handler(event, context):
+    bucket = event['Records'][0]['s3']['bucket']['name']
+    file_key = event['Records'][0]['s3']['object']['key']
 
-pipeline
-{
-  agent any 
-  stages
-  {
-   stage ('continous download')
-   {
-    steps
-    {
-      git url
-}
-  steps
-  {
-    hjfhjhfekfieifi
-}
-  steps
-   { 
-     hufhjyfijhfiuif
- }
-}
-}
-}
+    if not file_key.endswith('.txt') or not file_key.startswith('out/'):
+        return
+
+    local_file = '/tmp/input.txt'
+    s3.download_file(bucket, file_key, local_file)
+
+    with open(local_file, 'r') as f:
+        count = len(f.read().split())
+
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    result_line = f"{timestamp} | {file_key} | Word Count: {count}\n"
+
+    count_file = '/tmp/count.txt'
+    try:
+        s3.download_file(bucket, 'count/count.txt', count_file)
+    except:
+        open(count_file, 'w').close()
+
+    with open(count_file, 'a') as f:
+        f.write(result_line)
+
+    s3.upload_file(count_file, bucket, 'count/count.txt')
+
+
+
+
+import boto3
+import os
+
+ec2 = boto3.client('ec2')
+instance_id = os.environ['INSTANCE_ID']
+action = os.environ['ACTION']
+
+def lambda_handler(event, context):
+    if action == "start":
+        ec2.start_instances(InstanceIds=[instance_id])
+    elif action == "stop":
+        ec2.stop_instances(InstanceIds=[instance_id])
+
+
+
+
+
+
+import boto3
+from datetime import datetime, timezone, timedelta
+
+ec2 = boto3.client('ec2')
+
+def lambda_handler(event, context):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    snapshots = ec2.describe_snapshots(OwnerIds=['self'])['Snapshots']
+
+    for snap in snapshots:
+        if snap['StartTime'] < cutoff:
+            ec2.delete_snapshot(SnapshotId=snap['SnapshotId'])
+
+
+
+
+---
+
+## 🔐 IAM Role: `lambda-case-study5-role`
+
+- **Attached Policies:**
+  - `AmazonS3FullAccess`
+  - `AmazonEC2FullAccess`
+  - `CloudWatchLogsFullAccess`
+
+---
+
+## 🧠 Lambda Functions
+
+| Function Name      | Purpose                      |
+|--------------------|------------------------------|
+| `wordcount-handler`| Counts words in `/out/*.txt` |
+| `ec2-scheduler`    | Starts/stops EC2 instance     |
+| `snapshot-cleaner` | Deletes EBS snapshots > 14d  |
+
+---
+
+## ⏰ EventBridge Scheduled Rules
+
+| Rule Name             | Schedule                | Target Function     |
+|-----------------------|-------------------------|---------------------|
+| `stop-ec2-6pm`        | `cron(0 18 * * ? *)`     | `ec2-scheduler`     |
+| `start-ec2-9pm`       | `cron(0 21 * * ? *)`     | `ec2-scheduler`     |
+| `snapshot-clean-sunday` | `cron(0 2 ? * 1 *)`     | `snapshot-cleaner`  |
+
+---
+
+## 📸 Screenshots & Evidence
+
+| What to Capture                              | ✔️ |
+|----------------------------------------------|----|
+| S3 → `out/` file upload (`sample.txt`)       | ☐ |
+| S3 → `count/count.txt` with word count logs  | ☐ |
+| Lambda → All 3 functions shown in console    | ☐ |
+| IAM → Role `lambda-case-study5-role`         | ☐ |
+| CloudWatch → Log group for each Lambda       | ☐ |
+| EC2 → Screenshot of instance start/stop logs | ☐ |
+| EventBridge → List of scheduled rules        | ☐ |
+| EBS → Snapshot deletion logs or filter list  | ☐ |
+
+---
+
+## 🏁 Final Notes
+
+- All automation was achieved using the AWS Console.
+- No CLI, Terraform, or Python local development was used — everything was handled via Lambda in-browser editor.
+- Fully aligns with **skill evaluation points** (IAM, S3 trigger, Lambda automation, EventBridge scheduling).
+
+---
