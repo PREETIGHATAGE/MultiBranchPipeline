@@ -1,3 +1,108 @@
+[
+  {
+    "ParameterKey": "VpcCIDR",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "PublicSubnet1CIDR",
+    "ParameterValue": "10.0.1.0/24"
+  },
+  {
+    "ParameterKey": "PublicSubnet2CIDR",
+    "ParameterValue": "10.0.2.0/24"
+  },
+  {
+    "ParameterKey": "DomainName",
+    "ParameterValue": "bluegreen.example.com"
+  },
+  {
+    "ParameterKey": "HostedZoneId",
+    "ParameterValue": "Z123456ABCDEFG"
+  },
+  {
+    "ParameterKey": "AMI",
+    "ParameterValue": "ami-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t2.micro"
+  }
+]
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Master stack for Blue/Green Deployment with nested CloudFormation templates
+
+Parameters:
+  VpcCIDR:
+    Type: String
+  PublicSubnet1CIDR:
+    Type: String
+  PublicSubnet2CIDR:
+    Type: String
+  DomainName:
+    Type: String
+  HostedZoneId:
+    Type: String
+  AMI:
+    Type: String
+  InstanceType:
+    Type: String
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/network/vpc-subnets.yaml
+      Parameters:
+        VpcCIDR: !Ref VpcCIDR
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+
+  ACMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/acm/ssl-cert.yaml
+      Parameters:
+        DomainName: !Ref DomainName
+
+  ALBBlueStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/alb/alb-blue.yaml
+
+  ALBGreenStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/alb/alb-green.yaml
+
+  ASGBlueStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/asg/asg-blue.yaml
+      Parameters:
+        AMI: !Ref AMI
+        InstanceType: !Ref InstanceType
+        Subnet1: "subnet-xxxxxx"              # 🔁 Replace with actual public subnet ID
+        Subnet2: "subnet-yyyyyy"
+        TargetGroupArn: "arn:aws:elasticloadbalancing:region:account:targetgroup/blue-TG-XYZ"  # 🔁 Replace
+
+  ASGGreenStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/asg/asg-green.yaml
+      Parameters:
+        AMI: !Ref AMI
+        InstanceType: !Ref InstanceType
+        Subnet1: "subnet-xxxxxx"              # 🔁 Replace with actual public subnet ID
+        Subnet2: "subnet-yyyyyy"
+        TargetGroupArn: "arn:aws:elasticloadbalancing:region:account:targetgroup/green-TG-XYZ"  # 🔁 Replace
+
+  DNSRoutingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/route53/dns-weighted-routing.yaml
+      Parameters:
+        DomainName: !Ref DomainName
+        HostedZoneId: !Ref HostedZoneId
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Master stack for Blue/Green Deployment with nested CloudFormation templates
