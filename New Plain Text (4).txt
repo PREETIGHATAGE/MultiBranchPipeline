@@ -1,0 +1,29 @@
+
+
+✅ Complete CloudFormation Nested Stack Templates in One File
+
+master-template.yaml
+
+AWSTemplateFormatVersion: '2010-09-09' Description: Master stack for Blue/Green Deployment with nested CloudFormation templates Resources: VPCStack: Type: AWS::CloudFormation::Stack Properties: TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/network/vpc-subnets.yaml Parameters: VpcCIDR: "10.0.0.0/16" PublicSubnet1CIDR: "10.0.1.0/24" PublicSubnet2CIDR: "10.0.2.0/24" ACMStack: Type: AWS::CloudFormation::Stack Properties: TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/acm/ssl-cert.yaml Parameters: DomainName: "bluegreen.example.com" ALBBlueStack: Type: AWS::CloudFormation::Stack Properties: TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/alb/alb-blue.yaml ALBGreenStack: Type: AWS::CloudFormation::Stack Properties: TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/alb/alb-green.yaml ASGBlueStack: Type: AWS::CloudFormation::Stack Properties: TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/asg/asg-blue.yaml ASGGreenStack: Type: AWS::CloudFormation::Stack Properties: TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/asg/asg-green.yaml DNSRoutingStack: Type: AWS::CloudFormation::Stack Properties: TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/route53/dns-weighted-routing.yaml Parameters: DomainName: "bluegreen.example.com" HostedZoneId: "Z123456ABCDEFG"
+
+network/vpc-subnets.yaml
+
+AWSTemplateFormatVersion: '2010-09-09' Description: Create VPC and public subnets for B/G deployment Parameters: VpcCIDR: Type: String PublicSubnet1CIDR: Type: String PublicSubnet2CIDR: Type: String Resources: VPC: Type: AWS::EC2::VPC Properties: CidrBlock: !Ref VpcCIDR EnableDnsSupport: true EnableDnsHostnames: true Tags: - Key: Name Value: bluegreen-vpc PublicSubnet1: Type: AWS::EC2::Subnet Properties: VpcId: !Ref VPC CidrBlock: !Ref PublicSubnet1CIDR MapPublicIpOnLaunch: true AvailabilityZone: !Select [0, !GetAZs ''] Tags: - Key: Name Value: bluegreen-subnet-1 PublicSubnet2: Type: AWS::EC2::Subnet Properties: VpcId: !Ref VPC CidrBlock: !Ref PublicSubnet2CIDR MapPublicIpOnLaunch: true AvailabilityZone: !Select [1, !GetAZs ''] Tags: - Key: Name Value: bluegreen-subnet-2 InternetGateway: Type: AWS::EC2::InternetGateway AttachGateway: Type: AWS::EC2::VPCGatewayAttachment Properties: VpcId: !Ref VPC InternetGatewayId: !Ref InternetGateway PublicRouteTable: Type: AWS::EC2::RouteTable Properties: VpcId: !Ref VPC DefaultRoute: Type: AWS::EC2::Route Properties: RouteTableId: !Ref PublicRouteTable DestinationCidrBlock: 0.0.0.0/0 GatewayId: !Ref InternetGateway Subnet1RouteTableAssoc: Type: AWS::EC2::SubnetRouteTableAssociation Properties: SubnetId: !Ref PublicSubnet1 RouteTableId: !Ref PublicRouteTable Subnet2RouteTableAssoc: Type: AWS::EC2::SubnetRouteTableAssociation Properties: SubnetId: !Ref PublicSubnet2 RouteTableId: !Ref PublicRouteTable Outputs: VPC: Value: !Ref VPC PublicSubnet1: Value: !Ref PublicSubnet1 PublicSubnet2: Value: !Ref PublicSubnet2
+
+alb/alb-blue.yaml and alb-green.yaml (identical structure with 'blue'/'green')
+
+AWSTemplateFormatVersion: '2010-09-09' Description: ALB for Blue or Green Environment Parameters: VPC: Type: String PublicSubnet1: Type: String PublicSubnet2: Type: String SecurityGroup: Type: String Resources: ALB: Type: AWS::ElasticLoadBalancingV2::LoadBalancer Properties: Name: !Sub "${AWS::StackName}-alb" Subnets: - !Ref PublicSubnet1 - !Ref PublicSubnet2 SecurityGroups: - !Ref SecurityGroup Scheme: internet-facing Type: application IpAddressType: ipv4 TargetGroup: Type: AWS::ElasticLoadBalancingV2::TargetGroup Properties: Name: !Sub "${AWS::StackName}-tg" Port: 80 Protocol: HTTP VpcId: !Ref VPC TargetType: instance HealthCheckProtocol: HTTP HealthCheckPath: "/" Matcher: HttpCode: 200-399 Listener: Type: AWS::ElasticLoadBalancingV2::Listener Properties: LoadBalancerArn: !Ref ALB Port: 80 Protocol: HTTP DefaultActions: - Type: forward TargetGroupArn: !Ref TargetGroup Outputs: ALBArn: Value: !Ref ALB ALBDNS: Value: !GetAtt ALB.DNSName TargetGroupArn: Value: !Ref TargetGroup
+
+asg/asg-blue.yaml and asg-green.yaml
+
+AWSTemplateFormatVersion: '2010-09-09' Description: Auto Scaling Group Parameters: AMI: Type: String InstanceType: Type: String Subnet1: Type: String Subnet2: Type: String TargetGroupArn: Type: String Resources: LaunchTemplate: Type: AWS::EC2::LaunchTemplate Properties: LaunchTemplateName: !Sub "${AWS::StackName}-lt" LaunchTemplateData: ImageId: !Ref AMI InstanceType: !Ref InstanceType UserData: Fn::Base64: !Sub | #!/bin/bash yum install -y httpd systemctl start httpd echo "Hello from ${AWS::StackName}" > /var/www/html/index.html ASG: Type: AWS::AutoScaling::AutoScalingGroup Properties: MinSize: '1' MaxSize: '3' DesiredCapacity: '2' VPCZoneIdentifier: - !Ref Subnet1 - !Ref Subnet2 TargetGroupARNs: - !Ref TargetGroupArn LaunchTemplate: LaunchTemplateId: !Ref LaunchTemplate Version: !GetAtt LaunchTemplate.LatestVersionNumber Outputs: ASG: Value: !Ref ASG
+
+acm/ssl-cert.yaml
+
+AWSTemplateFormatVersion: '2010-09-09' Description: ACM Certificate Parameters: DomainName: Type: String Resources: SSLCert: Type: AWS::CertificateManager::Certificate Properties: DomainName: !Ref DomainName ValidationMethod: DNS Outputs: CertArn: Value: !Ref SSLCert
+
+route53/dns-weighted-routing.yaml
+
+AWSTemplateFormatVersion: '2010-09-09' Description: Route 53 Weighted Records Parameters: DomainName: Type: String HostedZoneId: Type: String Resources: BlueRecord: Type: AWS::Route53::RecordSet Properties: Name: !Ref DomainName HostedZoneId: !Ref HostedZoneId Type: A SetIdentifier: blue Weight: 100 AliasTarget: DNSName: blue-alb-dns-name.example.com HostedZoneId: Z2FDTNDATAQYW2 GreenRecord: Type: AWS::Route53::RecordSet Properties: Name: !Ref DomainName HostedZoneId: !Ref HostedZoneId Type: A SetIdentifier: green Weight: 0 AliasTarget: DNSName: green-alb-dns-name.example.com HostedZoneId: Z2FDTNDATAQYW2
+
+
