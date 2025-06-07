@@ -1,3 +1,51 @@
+#!/bin/bash
+
+# -------- CONFIG --------
+BUCKET="blue-green-cfn-templates"     # <- change if your bucket name is different
+STACK_NAME="blue-green-master"
+REGION="us-east-1"
+
+echo "✅ Uploading templates to S3..."
+
+aws s3 cp master-template.yaml s3://$BUCKET/ --region $REGION
+aws s3 cp network/vpc-subnets.yaml s3://$BUCKET/network/ --region $REGION
+aws s3 cp alb/alb-blue.yaml s3://$BUCKET/alb/ --region $REGION
+aws s3 cp alb/alb-green.yaml s3://$BUCKET/alb/ --region $REGION
+aws s3 cp asg/asg-blue.yaml s3://$BUCKET/asg/ --region $REGION
+aws s3 cp asg/asg-green.yaml s3://$BUCKET/asg/ --region $REGION
+aws s3 cp acm/ssl-cert.yaml s3://$BUCKET/acm/ --region $REGION
+aws s3 cp route53/dns-weighted-routing.yaml s3://$BUCKET/route53/ --region $REGION
+aws s3 cp parameters/params.json s3://$BUCKET/parameters/ --region $REGION
+
+echo "✅ Setting public-read permissions..."
+
+FILES=(
+  "master-template.yaml"
+  "network/vpc-subnets.yaml"
+  "alb/alb-blue.yaml"
+  "alb/alb-green.yaml"
+  "asg/asg-blue.yaml"
+  "asg/asg-green.yaml"
+  "acm/ssl-cert.yaml"
+  "route53/dns-weighted-routing.yaml"
+)
+
+for file in "${FILES[@]}"; do
+  aws s3api put-object-acl --bucket $BUCKET --key "$file" --acl public-read
+done
+
+echo "🚀 Launching CloudFormation stack: $STACK_NAME"
+
+aws cloudformation create-stack \
+  --stack-name $STACK_NAME \
+  --template-url https://s3.amazonaws.com/$BUCKET/master-template.yaml \
+  --parameters file://parameters/params.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region $REGION
+
+echo "🎉 Deployment started. Monitor stack in the AWS CloudFormation Console."
+
+
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Master stack for Blue/Green Deployment with nested CloudFormation templates
 
