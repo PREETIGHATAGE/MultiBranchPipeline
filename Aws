@@ -1,3 +1,64 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Master stack for Blue/Green Deployment with nested CloudFormation templates
+
+Parameters:
+  VpcCIDR:
+    Type: String
+  PublicSubnet1CIDR:
+    Type: String
+  PublicSubnet2CIDR:
+    Type: String
+  DomainName:
+    Type: String
+  HostedZoneId:
+    Type: String
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/network/vpc-subnets.yaml
+      Parameters:
+        VpcCIDR: !Ref VpcCIDR
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+
+  ACMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/acm/ssl-cert.yaml
+      Parameters:
+        DomainName: !Ref DomainName
+
+  ALBBlueStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/alb/alb-blue.yaml
+
+  ALBGreenStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/alb/alb-green.yaml
+
+  ASGBlueStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/asg/asg-blue.yaml
+
+  ASGGreenStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/asg/asg-green.yaml
+
+  DNSRoutingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/blue-green-cfn-templates/route53/dns-weighted-routing.yaml
+      Parameters:
+        DomainName: !Ref DomainName
+        HostedZoneId: !Ref HostedZoneId
+
 #!/bin/bash
 
 # -------- CONFIG --------
