@@ -1,0 +1,403 @@
+✅ Final Folder Structure (Copy Exactly)
+
+CASESTUDY-2/
+├── blue-green-deployment-cfn/
+│   ├── network/
+│   │   ├── vpc-subnets.yaml
+│   │   └── sg.yaml
+│   ├── asg/
+│   │   ├── asg-blue.yaml
+│   │   └── asg-green.yaml
+│   ├── alb/
+│   │   ├── alb-blue.yaml
+│   │   ├── alb-green.yaml
+│   │   ├── alb-blue-https-listener.yaml
+│   │   └── alb-green-https-listener.yaml
+│   ├── route53/
+│   │   └── dns-weighted-routing.yaml
+│   ├── acm/
+│   │   └── ssl-cert.yaml
+│   ├── master-template.yaml
+│   └── deploy.sh
+
+
+---
+
+📂 blue-green-deployment-cfn/network/vpc-subnets.yaml
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC, subnets, IGW, and route table
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  RTAssoc1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  RTAssoc2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+Outputs:
+  BlueGreenVPC:
+    Value: !Ref VPC
+    Export:
+      Name: BlueGreenVPC
+
+  BlueGreenSubnet1:
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: BlueGreenSubnet1
+
+  BlueGreenSubnet2:
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: BlueGreenSubnet2
+
+
+---
+
+📂 network/sg.yaml
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Security groups for ALB and EC2
+
+Resources:
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB Access
+      VpcId: !ImportValue BlueGreenVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP from ALB
+      VpcId: !ImportValue BlueGreenVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+Outputs:
+  ALBSecurityGroup:
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: ALBSecurityGroup
+
+  EC2SecurityGroup:
+    Value: !Ref EC2SecurityGroup
+    Export:
+      Name: EC2SecurityGroup
+
+
+---
+
+📂 asg/asg-blue.yaml and asg-green.yaml (just change subnet & tag)
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Blue/Green ASG
+
+Resources:
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: ami-0c02fb55956c7d316
+        InstanceType: t2.micro
+        SecurityGroupIds:
+          - !ImportValue EC2SecurityGroup
+        UserData: !Base64 |
+          #!/bin/bash
+          yum install -y httpd
+          systemctl start httpd
+          echo "Blue Version" > /var/www/html/index.html
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !ImportValue BlueGreenSubnet1
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 2
+      DesiredCapacity: 1
+
+> For green, change:
+
+
+
+echo "Green Version"
+
+BlueGreenSubnet1 ➜ BlueGreenSubnet2
+
+
+
+---
+
+📂 alb/alb-blue.yaml and alb-green.yaml
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Blue/Green ALB with listener
+
+Resources:
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !ImportValue BlueGreenVPC
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: blue-alb
+      Subnets:
+        - !ImportValue BlueGreenSubnet1
+        - !ImportValue BlueGreenSubnet2
+      SecurityGroups:
+        - !ImportValue ALBSecurityGroup
+      Scheme: internet-facing
+      Type: application
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ALBDNS:
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: BlueALBDNS
+
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+    Export:
+      Name: BlueTargetGroupArn
+
+> Green ALB: replace blue with green in names and resources.
+
+
+
+
+---
+
+📂 alb/alb-blue-https-listener.yaml and alb-green-https-listener.yaml
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: HTTPS Listener
+
+Resources:
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !ImportValue BlueALBDNS
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !ImportValue BlueGreenCertArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !ImportValue BlueTargetGroupArn
+
+> Change Blue to Green in green version.
+
+
+
+
+---
+
+📂 route53/dns-weighted-routing.yaml
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Weighted Routing for Blue/Green
+
+Resources:
+  BlueDNS:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: Z0883399DUDZQT4EYNH1
+      Name: app.myap123.com
+      Type: A
+      SetIdentifier: Blue
+      Weight: 100
+      AliasTarget:
+        DNSName: !ImportValue BlueALBDNS
+        HostedZoneId: Z35SXDOTRQ7X7K
+
+  GreenDNS:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: Z0883399DUDZQT4EYNH1
+      Name: app.myap123.com
+      Type: A
+      SetIdentifier: Green
+      Weight: 0
+      AliasTarget:
+        DNSName: !ImportValue GreenALBDNS
+        HostedZoneId: Z35SXDOTRQ7X7K
+
+
+---
+
+📂 acm/ssl-cert.yaml
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ACM cert for HTTPS
+
+Resources:
+  ACMCert:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: app.myap123.com
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: app.myap123.com
+          HostedZoneId: Z0883399DUDZQT4EYNH1
+
+Outputs:
+  BlueGreenCertArn:
+    Value: !Ref ACMCert
+    Export:
+      Name: BlueGreenCertArn
+
+
+---
+
+📂 master-template.yaml
+
+> (Add TemplateURLs after uploading to S3)
+
+
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Master Template
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/network/vpc-subnets.yaml
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/network/sg.yaml
+
+  ACMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/acm/ssl-cert.yaml
+
+  ASGBlueStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/asg/asg-blue.yaml
+
+  ASGGreenStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/asg/asg-green.yaml
+
+  ALBBlueStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/alb/alb-blue.yaml
+
+  ALBGreenStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/alb/alb-green.yaml
+
+  DNSRoutingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://S3_BUCKET_NAME/route53/dns-weighted-routing.yaml
+
+
+---
+
+📂 deploy.sh
+
+#!/bin/bash
+
+BUCKET=your-s3-bucket
+STACK_NAME=bluegreen-master-stack
+
+echo "Uploading templates..."
+aws s3 cp blue-green-deployment-cfn/ s3://$BUCKET/ --recursive --exclude "*" --include "*.yaml"
+
+echo "Deploying master stack..."
+aws cloudformation deploy \
+  --template-file blue-green-deployment-cfn/master-template.yaml \
+  --stack-name $STACK_NAME \
+  --capabilities CAPABILITY_NAMED_IAM
+
+
+---
